@@ -292,7 +292,7 @@ HTML_CREATE_POST = """
                 <input type="text" name="title" required placeholder="Post Title" maxlength="100">
             </div>
             <div class="form-group">
-                <textarea name="content" required placeholder="Post Content (max 200 characters)" maxlength="200></textarea>
+                <textarea name="content" required placeholder="Post Content (max 200 characters)" maxlength="200"></textarea>
             </div>
             <div class="form-group">
                 <input type="file" name="image">
