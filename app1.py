@@ -1,9 +1,10 @@
-from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory
+from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, flash
 from flask_sqlalchemy import SQLAlchemy
 import os
 from datetime import datetime
 
 app = Flask(__name__)
+app.secret_key = 'supersecretkey'  # Required for flash messages
 app.config['UPLOAD_FOLDER'] = 'images/'  # Directory for image uploads
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///posts.db'  # Database configuration
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -20,6 +21,7 @@ class Post(db.Model):
     image_filename = db.Column(db.String(100), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     comments = db.relationship('Comment', backref='post', lazy=True)
+    password = db.Column(db.String(100), nullable=False)  # Password for deletion
 
 # Database model for comments
 class Comment(db.Model):
@@ -27,6 +29,15 @@ class Comment(db.Model):
     content = db.Column(db.Text, nullable=True)
     image_filename = db.Column(db.String(100), nullable=True)
     post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    replies = db.relationship('Reply', backref='comment', lazy=True)
+
+# Database model for replies to comments
+class Reply(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=True)
+    image_filename = db.Column(db.String(100), nullable=True)
+    comment_id = db.Column(db.Integer, db.ForeignKey('comment.id'), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 # Create the database
@@ -43,7 +54,7 @@ HTML_INDEX = """
     <title>Text & Image Posts</title>
     <style>
         body { font-family: Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; background-color: #1e1e1e; border-radius: 10px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; background-color: #1e1e1e; border-radius: 10px; }
         h1, h2 { text-align: center; color: #ffffff; }
         .post-list { list-style-type: none; padding: 0; }
         .post-item { padding: 20px; background-color: #2e2e2e; border-radius: 10px; margin-bottom: 10px; cursor: pointer; }
@@ -85,13 +96,14 @@ HTML_VIEW_POST = """
     <title>{{ post.title }}</title>
     <style>
         body { font-family: Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; background-color: #1e1e1e; border-radius: 10px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; background-color: #1e1e1e; border-radius: 10px; }
         h1, h2 { text-align: center; color: #ffffff; }
         .post-content { margin-bottom: 20px; }
         .comment-list { list-style-type: none; padding: 0; margin-top: 20px; }
-        .comment-item { padding: 10px; background-color: #3e3e3e; border-radius: 5px; margin-top: 10px; }
+        .comment-item, .reply-item { padding: 10px; background-color: #3e3e3e; border-radius: 5px; margin-top: 10px; }
         a { color: #90caf9; text-decoration: none; }
         a:hover { color: #64b5f6; }
+        .reply-form { margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -103,6 +115,10 @@ HTML_VIEW_POST = """
                 <img src="{{ url_for('images', filename=post.image_filename) }}" alt="Post Image" style="max-width: 100%; height: auto;">
             {% endif %}
             <small>Posted on {{ post.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+            <form action="{{ url_for('delete_post', post_id=post.id) }}" method="POST">
+                <input type="password" name="password" placeholder="Enter password to delete">
+                <button type="submit">Delete Post</button>
+            </form>
         </div>
         <h2>Comments:</h2>
         <ul class="comment-list">
@@ -113,6 +129,22 @@ HTML_VIEW_POST = """
                         <img src="{{ url_for('images', filename=comment.image_filename) }}" alt="Comment Image" style="max-width: 100%; height: auto;">
                     {% endif %}
                     <small>Commented on {{ comment.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+                    <form action="{{ url_for('add_reply', comment_id=comment.id) }}" method="POST" enctype="multipart/form-data" class="reply-form">
+                        <input type="text" name="content" placeholder="Reply...">
+                        <input type="file" name="image" accept="image/*">
+                        <button type="submit">Reply</button>
+                    </form>
+                    <ul class="reply-list">
+                        {% for reply in comment.replies %}
+                            <li class="reply-item">
+                                <p>{{ reply.content }}</p>
+                                {% if reply.image_filename %}
+                                    <img src="{{ url_for('images', filename=reply.image_filename) }}" alt="Reply Image" style="max-width: 100%; height: auto;">
+                                {% endif %}
+                                <small>Replied on {{ reply.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+                            </li>
+                        {% endfor %}
+                    </ul>
                 </li>
             {% endfor %}
         </ul>
@@ -135,7 +167,7 @@ HTML_CREATE_POST = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create New Post</title>
     <style>
-        body { font-family: Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+        body { font-family: Arial, sans-serif; background-color: #121212; color: #e0e0e0e0; margin: 0; padding: 20px; }
         .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #1e1e1e; border-radius: 10px; }
         h1 { text-align: center; }
         input, textarea { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ccc; }
@@ -150,6 +182,7 @@ HTML_CREATE_POST = """
             <input type="text" name="title" placeholder="Post Title" required>
             <textarea name="content" placeholder="Post Content" required></textarea>
             <input type="file" name="image" accept="image/*">
+            <input type="password" name="password" placeholder="Set password for deletion" required>
             <button type="submit">Submit Post</button>
         </form>
         <a href="{{ url_for('index') }}">Back to Home</a>
@@ -174,6 +207,7 @@ def create_post():
     if request.method == 'POST':
         title = request.form['title']
         content = request.form.get('content')
+        password = request.form['password']
         image_file = request.files.get('image')
         
         image_filename = None
@@ -181,7 +215,7 @@ def create_post():
             image_filename = image_file.filename
             image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], image_filename))
 
-        new_post = Post(title=title, content=content, image_filename=image_filename)
+        new_post = Post(title=title, content=content, image_filename=image_filename, password=password)
         db.session.add(new_post)
         db.session.commit()
         return redirect(url_for('index'))
@@ -203,10 +237,39 @@ def add_comment(post_id):
     db.session.commit()
     return redirect(url_for('view_post', post_id=post_id))
 
+@app.route('/add_reply/<int:comment_id>', methods=['POST'])
+def add_reply(comment_id):
+    content = request.form['content']
+    image_file = request.files.get('image')
+
+    image_filename = None
+    if image_file:
+        image_filename = image_file.filename
+        image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], image_filename))
+
+    new_reply = Reply(content=content, image_filename=image_filename, comment_id=comment_id)
+    db.session.add(new_reply)
+    db.session.commit()
+    comment = Comment.query.get_or_404(comment_id)
+    return redirect(url_for('view_post', post_id=comment.post_id))
+
+@app.route('/delete_post/<int:post_id>', methods=['POST'])
+def delete_post(post_id):
+    post = Post.query.get_or_404(post_id)
+    password = request.form['password']
+    if password == post.password:
+        db.session.delete(post)
+        db.session.commit()
+        flash("Post deleted successfully.", "success")
+        return redirect(url_for('index'))
+    else:
+        flash("Incorrect password. Post not deleted.", "error")
+        return redirect(url_for('view_post', post_id=post_id))
+
 @app.route('/images/<filename>')
 def images(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-app.run(host='0.0.0.0', port=5000, debug=True)
-
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
 
